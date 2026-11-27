@@ -360,8 +360,11 @@ namespace WpsAutostartKiller
                     low.IndexOf("wpsupdate", StringComparison.Ordinal) < 0 &&
                     low.IndexOf("kingsoft", StringComparison.Ordinal) < 0) continue;
 
-                Match m = Regex.Match(line, "^\"([^\"]*)\"");
-                string name = m.Success ? m.Groups[1].Value : line.Split(',')[0].Trim('"');
+                // schtasks /fo CSV /v 的列序是：0=HostName, 1=TaskName, 2..=其余, 8=Task To Run
+                // 注意：第 0 列是计算机名。早期版本取第 0 列，把主机名当成了任务名，
+                // 真实事故：日志出现「导出失败：LAPTOP-XXXX」，导致闸1 去操作一个不存在的任务。
+                List<string> flds = CsvFields(line);
+                string name = flds.Count > 1 ? flds[1] : (flds.Count > 0 ? flds[0] : "");
                 name = name.Trim().TrimStart('\\');
                 if (name.Length == 0) continue;
                 if (seen.ContainsKey(name)) continue;
@@ -370,11 +373,48 @@ namespace WpsAutostartKiller
                 WpsTask t = new WpsTask();
                 t.Name = name;
                 t.Raw = line.Length > 400 ? line.Substring(0, 400) : line;
-                Match em = Regex.Match(line, "([A-Za-z]:\\\\[^\"',]*?\\.exe)", RegexOptions.IgnoreCase);
-                t.Exec = em.Success ? em.Groups[1].Value : "";
+                if (flds.Count > 8 && flds[8].Trim().Length > 0)
+                {
+                    t.Exec = flds[8].Trim();
+                }
+                else
+                {
+                    Match em = Regex.Match(line, "([A-Za-z]:\\\\[^\"',]*?\\.exe)", RegexOptions.IgnoreCase);
+                    t.Exec = em.Success ? em.Groups[1].Value : "";
+                }
                 list.Add(t);
             }
             return list;
+        }
+
+        /// <summary>按 RFC4180 规则切分 schtasks 的 CSV 行（处理引号包裹与双写转义）。</summary>
+        private static List<string> CsvFields(string line)
+        {
+            List<string> f = new List<string>();
+            if (line == null) return f;
+            bool inQuotes = false;
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < line.Length; i++)
+            {
+                char c = line[i];
+                if (inQuotes)
+                {
+                    if (c == '"')
+                    {
+                        if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
+                        else inQuotes = false;
+                    }
+                    else sb.Append(c);
+                }
+                else
+                {
+                    if (c == '"') inQuotes = true;
+                    else if (c == ',') { f.Add(sb.ToString()); sb.Length = 0; }
+                    else sb.Append(c);
+                }
+            }
+            f.Add(sb.ToString());
+            return f;
         }
 
         public static bool Disable(string name)
@@ -2925,22 +2965,14 @@ namespace WpsAutostartKiller
         private void BackupOnly()
         {
             if (_layout == null) { LogLine("请先点『检测』。", Color.Khaki); return; }
+            WpsLayout l = _layout;
+            bool admin = _isAdmin;
             RunAsync("备份现场", delegate
             {
-                string dir = Path.Combine(Paths.ExeDir, "backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
-                Directory.CreateDirectory(dir);
-                LogLine("备份目录：" + dir);
-                List<WpsTask> ts = Tasks.Find();
-                foreach (WpsTask t in ts)
-                {
-                    string xml = Tasks.ExportXml(t.Name);
-                    if (string.IsNullOrEmpty(xml)) { LogLine("导出失败：" + t.Name); continue; }
-                    string safe = Regex.Replace(t.Name, "[^A-Za-z0-9_.-]", "_");
-                    File.WriteAllText(Path.Combine(dir, safe + ".xml"), xml, Encoding.UTF8);
-                    LogLine("已导出任务：" + t.Name);
-                }
-                LogLine("任务数：" + ts.Count);
-                LogLine("提示：完整备份（含 manifest 与哈希）会在点『关闭自启』时自动生成。");
+                // 早期版本这里只导出了计划任务 XML，manifest / 哈希 / 注册表 / 服务 / 升级配置都没落盘，
+                // 还提示「完整备份会在点关闭自启时生成」——与按钮语义不符。现在直接走完整备份。
+                string dir = Killer.BackupOnly(l, admin, LogLine);
+                if (string.IsNullOrEmpty(dir)) LogLine("备份未完成，详见上方日志。", Color.Khaki);
             });
         }
 
