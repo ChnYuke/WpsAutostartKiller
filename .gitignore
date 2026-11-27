@@ -1,0 +1,27 @@
+# 备份产物 —— 里面含原版程序存档与注册表导出，不要提交
+backup-*/
+upgrade-backup-*/
+upgrade-before*.json
+
+# 运行日志
+*.log
+selftest-output.txt
+upgrade-test-output.txt
+
+# 编译中间物
+.work/
+bin/
+obj/
+*.pdb
+*.cache
+
+# 临时/演练
+*-dryrun/
+_dryrun/
+
+# 编辑器与系统
+.vs/
+.vscode/
+*.user
+Thumbs.db
+desktop.ini
